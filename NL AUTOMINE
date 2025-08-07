@@ -1,0 +1,262 @@
+-- ui libar
+local UILibrary = loadstring(game:HttpGet("https://raw.githubusercontent.com/bloodball/-back-ups-for-libs/main/twink"))()
+local MainUI = UILibrary.Load("lionhearts economy fucker (made by ladiesman217)")
+local MinePage = MainUI.AddPage("Auto-Mine")
+
+-- services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local database = require(ReplicatedStorage:WaitForChild("Database"))
+
+-- options and defaults
+local isAutoMining = false
+local isESPEnabled = false
+local flying = false
+local noclip = false
+local walkSpeed = 26
+local MINE_RADIUS = 100000
+local ESPs = {}
+local BodyVelocity = nil
+local currentZone = "A"
+
+-- infernum zone cords and bounds (changeable depending on region currently set to NL infernums)
+local zoneA_min = Vector3.new(-696, -158, 1216)
+local zoneA_max = Vector3.new(-204, 233, 1616)
+local zoneB_min = Vector3.new(-6112, 485, -2382)
+local zoneB_max = Vector3.new(-5360, -209, -1582)
+local zoneA_center = Vector3.new(-450, -20, 1416)
+local zoneB_center = Vector3.new(-5736, -20, -1980)
+
+-- utils
+local function inBounds(pos, minVec, maxVec)
+	return pos.X >= math.min(minVec.X, maxVec.X) and pos.X <= math.max(minVec.X, maxVec.X)
+		and pos.Y >= math.min(minVec.Y, maxVec.Y) and pos.Y <= math.max(minVec.Y, maxVec.Y)
+		and pos.Z >= math.min(minVec.Z, maxVec.Z) and pos.Z <= math.max(minVec.Z, maxVec.Z)
+end
+
+local function isInZone(pos)
+	return inBounds(pos, zoneA_min, zoneA_max) or inBounds(pos, zoneB_min, zoneB_max)
+end
+
+local function isValidRock(model)
+	local id = model:GetAttribute("ResourceId")
+	local interactionType = model:GetAttribute("InteractionType")
+	if not id or interactionType ~= 5 then return false end
+	local name = model.Name:lower()
+	local keywords = { "rock", "ore", "hard", "coal", "stone", "copper" }
+	for _, word in ipairs(keywords) do
+		if name:find(word) then return true end
+	end
+	return false
+end
+
+-- gui 
+MinePage.AddSlider("Walk Speed", {
+	Default = walkSpeed,
+	Min = 2,
+	Max = 60
+}, function(val)
+	walkSpeed = val
+end)
+
+-- esp system
+local function clearESP()
+	for _, e in ipairs(ESPs) do if e then e:Destroy() end end
+	ESPs = {}
+end
+
+local function createESP(model)
+	if not model or not model.PrimaryPart then return end
+	local pos = model.PrimaryPart.Position
+
+	local color
+	if inBounds(pos, zoneA_min, zoneA_max) then
+		color = Color3.new(1, 0, 0) -- Red for A
+	elseif inBounds(pos, zoneB_min, zoneB_max) then
+		color = Color3.new(0, 0, 1) -- Blue for B
+	else
+		return
+	end
+
+	local bb = Instance.new("BillboardGui", model)
+	bb.Adornee = model.PrimaryPart
+	bb.Size = UDim2.new(0, 100, 0, 30)
+	bb.StudsOffset = Vector3.new(0, 4, 0)
+	bb.AlwaysOnTop = true
+
+	local txt = Instance.new("TextLabel", bb)
+	txt.Size = UDim2.new(1, 0, 1, 0)
+	txt.BackgroundTransparency = 1
+	txt.Text = model.Name
+	txt.TextColor3 = color
+	txt.TextStrokeTransparency = 0
+	txt.TextScaled = true
+
+	local glow = Instance.new("SelectionBox", model)
+	glow.Adornee = model
+	glow.LineThickness = 0.05
+	glow.SurfaceColor3 = color
+	glow.SurfaceTransparency = 0.5
+	glow.Color3 = color
+
+	table.insert(ESPs, bb)
+	table.insert(ESPs, glow)
+end
+
+MinePage.AddToggle("Enable Ore ESP", false, function(Value)
+	isESPEnabled = Value
+	clearESP()
+	if not Value then return end
+
+	task.spawn(function()
+		while isESPEnabled do
+			clearESP()
+			local folder = Workspace.Resources:FindFirstChild("Spawned")
+			if folder then
+				for _, m in ipairs(folder:GetChildren()) do
+					if m:IsA("Model") and m.PrimaryPart and isValidRock(m) and isInZone(m.PrimaryPart.Position) then
+						createESP(m)
+					end
+				end
+			end
+			task.wait(3)
+		end
+	end)
+end)
+
+-- movement system 
+local function enableFly()
+	local hrp = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
+	BodyVelocity = Instance.new("BodyVelocity")
+	BodyVelocity.MaxForce = Vector3.new(1, 1, 1) * 1e9
+	BodyVelocity.Velocity = Vector3.zero
+	BodyVelocity.Parent = hrp
+end
+
+local function disableFly()
+	if BodyVelocity then BodyVelocity:Destroy() BodyVelocity = nil end
+end
+
+local function enableNoclip()
+	noclip = true
+	RunService.Stepped:Connect(function()
+		if noclip and LocalPlayer.Character then
+			for _, p in pairs(LocalPlayer.Character:GetDescendants()) do
+				if p:IsA("BasePart") then p.CanCollide = false end
+			end
+		end
+	end)
+end
+
+local function disableNoclip() noclip = false end
+
+-- mining system and functions
+local function getNearestResource()
+	local folder = Workspace.Resources:FindFirstChild("Spawned")
+	if not folder then return nil end
+
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+
+	local closest, closestDist = nil, MINE_RADIUS
+
+	for _, model in ipairs(folder:GetChildren()) do
+		if model:IsA("Model") and model.PrimaryPart and isValidRock(model) and isInZone(model.PrimaryPart.Position) then
+			local dist = (root.Position - model.PrimaryPart.Position).Magnitude
+			if dist < closestDist then
+				closest = model
+				closestDist = dist
+			end
+		end
+	end
+
+	return closest
+end
+
+MinePage.AddToggle("Auto-Mine Nearby", false, function(val)
+	isAutoMining = val
+
+	if val then
+		enableFly()
+		enableNoclip()
+		flying = true
+	else
+		disableFly()
+		disableNoclip()
+		flying = false
+		return
+	end
+
+	task.spawn(function()
+		while isAutoMining do
+			local char = LocalPlayer.Character
+			if not char then task.wait(1) continue end
+
+			local root = char:FindFirstChild("HumanoidRootPart")
+			local backpack = LocalPlayer:FindFirstChild("Backpack")
+			local pickaxe = char:FindFirstChildOfClass("Tool") or (backpack and backpack:FindFirstChildOfClass("Tool"))
+			if not pickaxe then task.wait(1) continue end
+
+			if backpack and backpack:FindFirstChild(pickaxe.Name) then
+				LocalPlayer.Character.Humanoid:EquipTool(pickaxe)
+				task.wait(0.5)
+			end
+
+			local rock = getNearestResource()
+
+			if not rock then
+				-- this shit took me so long to figure out 
+				currentZone = currentZone == "A" and "B" or "A"
+				local target = currentZone == "A" and zoneA_center or zoneB_center
+
+				-- flying low to avoid annoying faggots who go straight to judiciary 
+repeat
+	local lowTarget = Vector3.new(target.X, -20, target.Z)
+	local direction = (lowTarget - root.Position).Unit
+	BodyVelocity.Velocity = direction * walkSpeed
+	task.wait()
+until (root.Position - lowTarget).Magnitude <= 5 or not isAutoMining
+
+
+				BodyVelocity.Velocity = Vector3.zero
+				task.wait(1)
+				continue
+			end
+
+			local pos = rock.PrimaryPart.Position - Vector3.new(0, 11, 0)
+			task.spawn(function()
+				while flying and isAutoMining and (root.Position - pos).Magnitude > 3 do
+					local diff = root.Position - pos
+					local horizDist = Vector3.new(diff.X, 0, diff.Z).Magnitude
+					local yLift = (horizDist > 10 and 25 or pos.Y)
+					local adjustedPos = Vector3.new(pos.X, yLift, pos.Z)
+					local dir = (adjustedPos - root.Position).Unit
+					BodyVelocity.Velocity = dir * walkSpeed
+					task.wait()
+				end
+				if BodyVelocity then BodyVelocity.Velocity = Vector3.zero end
+			end)
+
+			repeat task.wait() until (root.Position - pos).Magnitude <= 3 or not isAutoMining
+
+			local resourceId = rock:GetAttribute("ResourceId")
+			if resourceId then
+				while rock and rock.Parent and isAutoMining do
+					database.ClientApi.Resources.DepleteResource(resourceId, pickaxe, function() end)
+					task.wait(0.2)
+				end
+			end
+
+			task.wait(0.5)
+		end
+	end)
+end)
+-- yusuf was here :) 
+
+
+
