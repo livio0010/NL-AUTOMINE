@@ -1,7 +1,9 @@
+-- NL VERSION
 -- ui libar
 local UILibrary = loadstring(game:HttpGet("https://raw.githubusercontent.com/bloodball/-back-ups-for-libs/main/twink"))()
 local MainUI = UILibrary.Load("lionhearts economy fucker (made by ladiesman217)")
 local MinePage = MainUI.AddPage("Auto-Mine")
+
 
 -- services
 local Players = game:GetService("Players")
@@ -20,6 +22,7 @@ local noclip = false
 local walkSpeed = 26
 local MINE_RADIUS = 100000
 local ESPs = {}
+local scanRadius = 1000 -- default scan radius for  player zone occupation check
 local BodyVelocity = nil
 local currentZone = "A"
 
@@ -31,6 +34,60 @@ local zoneB_max = Vector3.new(-5360, -209, -1582)
 local zoneA_center = Vector3.new(-450, -20, 1416)
 local zoneB_center = Vector3.new(-5736, -20, -1980)
 
+--notification system
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local PlayerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local notifGui = Instance.new("ScreenGui")
+notifGui.Name = "SimpleNotificationGui"
+notifGui.ResetOnSpawn = false
+notifGui.Parent = PlayerGui
+
+local notifFrame = Instance.new("Frame")
+notifFrame.BackgroundColor3 = Color3.new(0, 0, 0)  
+notifFrame.BorderSizePixel = 0
+notifFrame.AnchorPoint = Vector2.new(0.5, 0)
+notifFrame.Position = UDim2.new(0.5, 0, 0, 50) 
+notifFrame.Size = UDim2.new(0, 350, 0, 50)
+notifFrame.BackgroundTransparency = 1  
+notifFrame.Visible = false
+notifFrame.Parent = notifGui
+
+local notifLabel = Instance.new("TextLabel")
+notifLabel.BackgroundTransparency = 1
+notifLabel.Size = UDim2.new(1, 0, 1, 0)
+notifLabel.TextColor3 = Color3.new(1, 1, 1) 
+notifLabel.Font = Enum.Font.GothamBold
+notifLabel.TextScaled = true
+notifLabel.Text = ""
+notifLabel.Parent = notifFrame
+
+local function showNotification(text)
+    notifLabel.Text = text
+    notifFrame.Visible = true
+
+    
+    local fadeInTween = TweenService:Create(notifFrame, TweenInfo.new(0.5), {BackgroundTransparency = 0})
+    fadeInTween:Play()
+    fadeInTween.Completed:Wait()
+
+    -- wait time for notif
+    task.wait(1)
+
+   
+    local fadeOutTween = TweenService:Create(notifFrame, TweenInfo.new(0.5), {BackgroundTransparency = 1})
+    fadeOutTween:Play()
+    fadeOutTween.Completed:Wait()
+
+    notifFrame.Visible = false
+    notifLabel.Text = ""
+end
+
+
+
+
+
 -- utils
 local function inBounds(pos, minVec, maxVec)
 	return pos.X >= math.min(minVec.X, maxVec.X) and pos.X <= math.max(minVec.X, maxVec.X)
@@ -41,6 +98,20 @@ end
 local function isInZone(pos)
 	return inBounds(pos, zoneA_min, zoneA_max) or inBounds(pos, zoneB_min, zoneB_max)
 end
+
+local function isZoneOccupied(centerPos, radius)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local pos = player.Character.HumanoidRootPart.Position
+			if (pos - centerPos).Magnitude <= radius then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+
 
 local function isValidRock(model)
 	local id = model:GetAttribute("ResourceId")
@@ -62,6 +133,15 @@ MinePage.AddSlider("Walk Speed", {
 }, function(val)
 	walkSpeed = val
 end)
+
+MinePage.AddSlider("Player Scan Radius", {
+	Default = scanRadius,
+	Min = 200,
+	Max = 1000
+}, function(val)
+	scanRadius = val
+end)
+
 
 -- esp system
 local function clearESP()
@@ -155,7 +235,7 @@ end
 local function disableNoclip() noclip = false end
 
 -- mining system and functions
-local function getNearestResource()
+local function getNearestResourceInCurrentZone()
 	local folder = Workspace.Resources:FindFirstChild("Spawned")
 	if not folder then return nil end
 
@@ -166,17 +246,28 @@ local function getNearestResource()
 	local closest, closestDist = nil, MINE_RADIUS
 
 	for _, model in ipairs(folder:GetChildren()) do
-		if model:IsA("Model") and model.PrimaryPart and isValidRock(model) and isInZone(model.PrimaryPart.Position) then
-			local dist = (root.Position - model.PrimaryPart.Position).Magnitude
-			if dist < closestDist then
-				closest = model
-				closestDist = dist
+		if model:IsA("Model") and model.PrimaryPart and isValidRock(model) then
+			local pos = model.PrimaryPart.Position
+			local inCurrentZone = false
+			if currentZone == "A" then
+				inCurrentZone = inBounds(pos, zoneA_min, zoneA_max)
+			else
+				inCurrentZone = inBounds(pos, zoneB_min, zoneB_max)
+			end
+			if inCurrentZone then
+				local dist = (root.Position - pos).Magnitude
+				if dist < closestDist then
+					closest = model
+					closestDist = dist
+				end
 			end
 		end
 	end
 
 	return closest
 end
+
+
 
 MinePage.AddToggle("Auto-Mine Nearby", false, function(val)
 	isAutoMining = val
@@ -207,55 +298,213 @@ MinePage.AddToggle("Auto-Mine Nearby", false, function(val)
 				task.wait(0.5)
 			end
 
-			local rock = getNearestResource()
-
-			if not rock then
-				-- this shit took me so long to figure out 
-				currentZone = currentZone == "A" and "B" or "A"
-				local target = currentZone == "A" and zoneA_center or zoneB_center
-
-				-- flying low to avoid annoying faggots who go straight to judiciary 
-repeat
-	local lowTarget = Vector3.new(target.X, -20, target.Z)
-	local direction = (lowTarget - root.Position).Unit
-	BodyVelocity.Velocity = direction * walkSpeed
-	task.wait()
-until (root.Position - lowTarget).Magnitude <= 5 or not isAutoMining
+			local rock = getNearestResourceInCurrentZone()
 
 
-				BodyVelocity.Velocity = Vector3.zero
-				task.wait(1)
-				continue
-			end
+-- check player in range 
+local zoneAHasPlayers = isZoneOccupied(zoneA_center, scanRadius)
+local zoneBHasPlayers = isZoneOccupied(zoneB_center, scanRadius)
 
-			local pos = rock.PrimaryPart.Position - Vector3.new(0, 11, 0)
-			task.spawn(function()
-				while flying and isAutoMining and (root.Position - pos).Magnitude > 3 do
-					local diff = root.Position - pos
-					local horizDist = Vector3.new(diff.X, 0, diff.Z).Magnitude
-					local yLift = (horizDist > 10 and 25 or pos.Y)
-					local adjustedPos = Vector3.new(pos.X, yLift, pos.Z)
-					local dir = (adjustedPos - root.Position).Unit
-					BodyVelocity.Velocity = dir * walkSpeed
-					task.wait()
-				end
-				if BodyVelocity then BodyVelocity.Velocity = Vector3.zero end
-			end)
+-- If no rocks in current zone
+if not rock then
+    local currentCenter = currentZone == "A" and zoneA_center or zoneB_center
+    local otherCenter = currentZone == "A" and zoneB_center or zoneA_center
 
-			repeat task.wait() until (root.Position - pos).Magnitude <= 3 or not isAutoMining
+    local currentZoneHasPlayers = isZoneOccupied(currentCenter, scanRadius)
+    local otherZoneHasPlayers = isZoneOccupied(otherCenter, scanRadius)
 
-			local resourceId = rock:GetAttribute("ResourceId")
-			if resourceId then
-				while rock and rock.Parent and isAutoMining do
-					database.ClientApi.Resources.DepleteResource(resourceId, pickaxe, function() end)
-					task.wait(0.2)
-				end
-			end
+    -- If players in both zones stay idle
+    if currentZoneHasPlayers and otherZoneHasPlayers then
+        showNotification("⚠️ Players in both zones! Staying idle...")
+        local idleTarget = currentZone == "A" and zoneA_center or zoneB_center
+        local flyTo = Vector3.new(idleTarget.X, -25, idleTarget.Z)
 
+        repeat
+            local dir = (flyTo - root.Position).Unit
+            BodyVelocity.Velocity = dir * walkSpeed
+            task.wait()
+        until (root.Position - flyTo).Magnitude <= 5 or not isAutoMining
+
+        BodyVelocity.Velocity = Vector3.zero
+        task.wait(2)
+        continue
+    end
+
+    -- If player in current zone, but other zone is clear, switch to other zone
+    if currentZoneHasPlayers and not otherZoneHasPlayers then
+        showNotification("🚷 Player nearby in current zone! Switching zones...")
+        currentZone = currentZone == "A" and "B" or "A"
+        local target = currentZone == "A" and zoneA_center or zoneB_center
+        local flyTo = Vector3.new(target.X, -20, target.Z)
+
+        repeat
+            local dir = (flyTo - root.Position).Unit
+            BodyVelocity.Velocity = dir * walkSpeed
+            task.wait()
+        until (root.Position - flyTo).Magnitude <= 5 or not isAutoMining
+
+        BodyVelocity.Velocity = Vector3.zero
+        task.wait(1)
+        continue
+    end
+
+    -- If no players nearby in current zone, just switch zone for ores
+    showNotification("🔄 Switching zones: No rocks found in Zone " .. currentZone)
+    currentZone = currentZone == "A" and "B" or "A"
+    local target = currentZone == "A" and zoneA_center or zoneB_center
+    local flyTo = Vector3.new(target.X, -20, target.Z)
+
+    repeat
+        local dir = (flyTo - root.Position).Unit
+        BodyVelocity.Velocity = dir * walkSpeed
+        task.wait()
+    until (root.Position - flyTo).Magnitude <= 5 or not isAutoMining
+
+    BodyVelocity.Velocity = Vector3.zero
+    task.wait(1)
+    continue
+end
+
+
+
+-- check if niggas  are in the current zone
+local rockPos = rock.PrimaryPart.Position
+local currentZoneCenter = inBounds(rockPos, zoneA_min, zoneA_max) and zoneA_center or zoneB_center
+
+if isZoneOccupied(currentZoneCenter, scanRadius) then
+	-- Check if niggas in both zones
+	if zoneAHasPlayers and zoneBHasPlayers then
+		showNotification("⚠️ Players in both zones! Staying idle...")
+		local flyTo = Vector3.new(currentZoneCenter.X, -25, currentZoneCenter.Z)
+
+		repeat
+			local dir = (flyTo - root.Position).Unit
+			BodyVelocity.Velocity = dir * walkSpeed
+			task.wait()
+		until (root.Position - flyTo).Magnitude <= 5 or not isAutoMining
+
+		BodyVelocity.Velocity = Vector3.zero
+		task.wait(2)
+		continue
+	end
+
+	-- Switch to the other zone if it's not occupied
+	showNotification("🚷 Player nearby! Switching to other zone...")
+	currentZone = currentZone == "A" and "B" or "A"
+	local target = currentZone == "A" and zoneA_center or zoneB_center
+	local flyTo = Vector3.new(target.X, -20, target.Z)
+
+	repeat
+		local dir = (flyTo - root.Position).Unit
+		BodyVelocity.Velocity = dir * walkSpeed
+		task.wait()
+	until (root.Position - flyTo).Magnitude <= 5 or not isAutoMining
+
+	BodyVelocity.Velocity = Vector3.zero
+	task.wait(1)
+	continue
+end
+
+
+
+
+	if rock then
+	local pos = rock.PrimaryPart.Position - Vector3.new(0, 11, 0)
+
+	task.spawn(function()
+		while flying and isAutoMining and (root.Position - pos).Magnitude > 3 do
+			local diff = root.Position - pos
+			local horizDist = Vector3.new(diff.X, 0, diff.Z).Magnitude
+			local yLift = (horizDist > 10 and 25 or pos.Y)
+			local adjustedPos = Vector3.new(pos.X, yLift, pos.Z)
+			local dir = (adjustedPos - root.Position).Unit
+			BodyVelocity.Velocity = dir * walkSpeed
+			task.wait()
+		end
+		if BodyVelocity then BodyVelocity.Velocity = Vector3.zero end
+	end)
+
+	repeat task.wait() until (root.Position - pos).Magnitude <= 3 or not isAutoMining
+
+	local resourceId = rock:GetAttribute("ResourceId")
+	if resourceId then
+		while rock and rock.Parent and isAutoMining do
+			database.ClientApi.Resources.DepleteResource(resourceId, pickaxe, function() end)
+			task.wait(0.2)
+		end
+	end
+end
 			task.wait(0.5)
 		end
 	end)
 end)
+
+--  Blacklist Auto Leave System 
+local blacklist = {
+    "JeuseChreist",
+    "caitylee",
+    "Vurseen",
+    "CyberNet_ix",
+    "archzius",
+    "DropsByRudo",
+    "Omaaruir",
+    "sleepingwolf",
+    "LordPixiePoo",
+    "IgnisParabellum",
+    "NinjaMandalorian",
+    "tihla",
+    "DIGUSTINGRoblox",
+    "annie_strawfairycow",
+    "HaroutYerets",
+    "CredenzioAutomation",
+    "DevSenju",
+    "Lactuca_Legatus",
+    "C3REBR0Monarchy",
+    "JanielPlayzYT",
+    "JunimoOfficial",
+    "Joobhl",
+    "AliParsHakhamaneshi",
+    "HiddenBladed",
+    "valorsouIs",
+    "Tall_Mage",
+    "Xeldath",
+    "Mithandir",
+    "Credenzio",
+    "ino_coolboy",
+    "BlueFox_27",
+    "jinnxlaw",
+    "frenchcorp",
+    "MysticReacon",
+    "MartinaNatuseroma",
+    "catnoir87c",
+    "zbygamedneek12"
+}
+
+local function checkForBlacklistedPlayer(player)
+    for _, name in ipairs(blacklist) do
+        if player.Name:lower() == name:lower() then
+            -- show notification before leaving
+            task.spawn(function()
+                showNotification("🚨 Blacklisted player detected: " .. player.Name .. " - Leaving!")
+                task.wait(1) -- allow notification to be seen
+                game:Shutdown()
+            end)
+            return
+        end
+    end
+end
+
+-- Check already present players
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        checkForBlacklistedPlayer(player)
+    end
+end
+
+-- Check players who join later
+Players.PlayerAdded:Connect(function(player)
+    checkForBlacklistedPlayer(player)
+end)
+
+
 -- yusuf was here :) 
-
-
