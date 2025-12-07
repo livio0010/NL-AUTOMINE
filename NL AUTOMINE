@@ -1,5 +1,14 @@
 -- NL VERSION
 -- ui libar
+
+local allowedUsername = "Hoppiieee"  
+
+if game.Players.LocalPlayer.Name ~= allowedUsername then
+    warn("This script is not allowed for this account.")
+    return -- stop the script completely
+end
+
+
 local UILibrary = loadstring(game:HttpGet("https://raw.githubusercontent.com/bloodball/-back-ups-for-libs/main/twink"))()
 local MainUI = UILibrary.Load("lionhearts economy fucker (made by ladiesman217)")
 local MinePage = MainUI.AddPage("Auto-Mine")
@@ -439,7 +448,7 @@ end
 	end)
 end)
 
---  Blacklist Auto Leave System 
+-- blacklist autoleave
 local blacklist = {
     "JeuseChreist",
     "caitylee",
@@ -477,7 +486,7 @@ local blacklist = {
     "MysticReacon",
     "MartinaNatuseroma",
     "catnoir87c",
-    "zbygamedneek12"
+    "adamo349341"
 }
 
 local function checkForBlacklistedPlayer(player)
@@ -505,6 +514,67 @@ end
 Players.PlayerAdded:Connect(function(player)
     checkForBlacklistedPlayer(player)
 end)
+
+-- 💤 Anti-AFK System 💤
+local VirtualUser = game:GetService("VirtualUser")
+Players.LocalPlayer.Idled:Connect(function()
+    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    task.wait(1)
+    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    print("[Anti-AFK] Activity simulated to prevent kick.")
+end)
+
+
+-- ✅ Whitelist (players who will be ignored in proximity / blacklist checks)
+local whitelist = {
+    "oguzecal", 
+    "havalimehmetoyunda", 
+    "memelibaba3",
+    "legendarycikarancocu", 
+    "MyAltBot1",
+    "MyAltBot2"
+}
+
+-- function to check if a player is whitelisted
+local function isWhitelisted(player)
+    for _, name in ipairs(whitelist) do
+        if player.Name:lower() == name:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- function to check if a player is blacklisted (but skip if whitelisted)
+local function checkForBlacklistedPlayer(player)
+    if isWhitelisted(player) then
+        return -- skip check entirely
+    end
+    for _, name in ipairs(blacklist) do
+        if player.Name:lower() == name:lower() then
+            task.spawn(function()
+                showNotification("🚨 Blacklisted player detected: " .. player.Name .. " - Leaving!")
+                task.wait(1)
+                game:Shutdown()
+            end)
+            return
+        end
+    end
+end
+
+-- initial check
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        checkForBlacklistedPlayer(player)
+    end
+end
+
+-- future joins
+Players.PlayerAdded:Connect(function(player)
+    checkForBlacklistedPlayer(player)
+end)
+
+
 
 
 -- yusuf was here :) 
